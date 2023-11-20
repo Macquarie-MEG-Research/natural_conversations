@@ -1,0 +1,7 @@
+fast-align-audio
+ffmpeg
+inaSpeechSegmenter
+pyannote.audio
+SpeechRecognition
+mne
+pandas
