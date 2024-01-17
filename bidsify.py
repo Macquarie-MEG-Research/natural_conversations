@@ -11,20 +11,20 @@ Done
 - Add EEG sensor positions
 - Align MEG and EEG and concatenate channels
 - Check jitter of triggers and auditory events on MEG for localiser
+- Incorporate fixed/improved auditory localiser trigger timing
 
 Todo
 ----
-- Add EEG reference channel back in
-- Add TSPCA (?)
-- Figure out trigger issue for G08 on localiser
-- Incorporate fixed/improved auditory localiser trigger timing
-- Source localization using fsaverage
-- Anonymize for eventual sharing
+- Mark channels as bad somehow (automatic? PTP/flat? Could inspect...)
+- Add TSPCA or reference regression to MNE-BIDS-Pipeline
 - Add annotations for speaking and listening
   (https://github.com/Macquarie-MEG-Research/natural_conversations/blob/main/align_and_segment_audios.py)
-  with 1-sec segments and run CSP
-- Set tasks properly in BIDS formatting and update MNE-BIDS-Pipeline to handle it
+  using 1-sec segments and run CSP
+- Run STRF-type analysis on M/EEG using auditory
+- Source localization using fsaverage using MBP
+- Anonymize for eventual sharing
 - Improve BIDS descriptions and authors
+- Set tasks properly in BIDS formatting and update MNE-BIDS-Pipeline to handle it
 
 Notes
 -----
@@ -43,7 +43,9 @@ from pathlib import Path
 import mne
 import mne_bids
 import numpy as np
-from scipy.signal import hilbert
+from scipy.spatial.distance import cdist
+
+import utils  # local module
 
 n_bas_meg = dict(G03=99, G18=99, G19=98)
 n_das_meg = dict(G15=99, G18=98, G19=99)
@@ -69,14 +71,15 @@ min_dur = 0.002  # for events
 
 subjects = tuple(f"G{s:02d}" for s in range(1, 28))
 blocks = dict(  # to BIDS task and run
-    localiser=("localizer", "01"),
     B1=("conversation", "01"),
     B2=("conversation", "02"),
     B3=("conversation", "03"),
     B4=("conversation", "04"),
     B5=("conversation", "05"),
+    localiser=("conversation", "06"),  # ("localizer", "01"),  # TODO: Revert
     resting=("rest", None),
 )
+event_id = dict(ba=1, da=2, dummy=99)
 
 # BIDS stuff
 name = "natural-conversations"
@@ -125,7 +128,13 @@ for subject in subjects:
             fname = glob.glob(str(pattern))
             assert len(fname) == 1, (key, pattern, fname)
             fnames[key] = fname[0]
-        raw_meg = mne.io.read_raw_kit(**fnames).load_data()
+        raw_meg = mne.io.read_raw_kit(
+            **fnames,
+            stim=[166, *range(176, 190)],
+            slope="+",
+            stim_code="channel",
+            stimthresh=2,
+        ).load_data()
         assert not np.allclose(raw_meg.info["dev_head_t"]["trans"], np.eye(4))
         assert raw_meg.first_time == 0
         # Empty room data (if present)
@@ -145,9 +154,18 @@ for subject in subjects:
             raw_eeg = mne.io.read_raw_brainvision(eeg_fname).load_data()
             raw_eeg.rename_channels(eeg_renames)
             raw_eeg.set_channel_types(ch_types_map)
-            raw_eeg.set_montage("standard_1020")
             assert raw_eeg.first_time == 0
             assert raw_eeg.info["sfreq"] == raw_meg.info["sfreq"]
+            mne.add_reference_channels(raw_eeg, "FCz", copy=False)
+            raw_eeg.set_eeg_reference(["FCz"])
+            assert raw_eeg.ch_names[-1] == "FCz"
+            raw_eeg.set_montage("standard_1020")
+            # fix some accounting that MNE-Python should probably take care of for us
+            with raw_eeg.info._unlock():
+                for ch in raw_eeg.info["chs"]:
+                    ch["loc"][3:6] = raw_eeg.info["chs"][-1]["loc"][3:6]
+                raw_eeg.info["custom_ref_applied"] = 0
+            raw_eeg.set_eeg_reference(projection=True)
             if block.startswith("B"):
                 trig_offset = int(block[1]) - 1
             else:
@@ -229,37 +247,17 @@ for subject in subjects:
             off = e - first_ord * m - p[1]
             np.testing.assert_allclose(off, 0., atol=2e-3)
             print(f"  Drift rate: {(1 - first_ord) * 1e6:+0.1f} PPM")
-            # Estimate jitter
-            auditory = raw_meg[166][0][0]
-            auditory -= np.mean(auditory)  # zscore
-            auditory /= np.std(auditory)
-            envelope = np.abs(hilbert(auditory))
-            onsets = np.where((envelope[:-1] <= 2) & (envelope[1:] > 2))[0] + 1
-            onsets = np.concatenate([[onsets[0]], onsets[1:][np.diff(onsets) > 100]])
-            # import matplotlib.pyplot as plt
-            # plt.plot(auditory)
-            # plt.plot(envelope)
-            # plt.plot(onsets, envelope[onsets], 'o')
-            # just look at first 100 since the end can have some junk
-            onsets = onsets[:100]
-            a_dts = np.diff(onsets) / raw_meg.info["sfreq"]
-            if subject not in bad_envelope_subjects:
-                np.testing.assert_array_less(a_dts, 0.6, err_msg="ISI too large")
-                np.testing.assert_array_less(0.4, a_dts, err_msg="ISI too short")
-                m_dts = np.diff(m[1:101])
-                np.testing.assert_allclose(
-                    a_dts,
-                    m_dts,
-                    atol=drift_tols.get(subject, 0.02),
-                    err_msg="Auditory jitter too large",
-                )
-                jitter = np.max(np.abs(a_dts - m_dts))
-                print(f"  Auditory jitter: {jitter * 1e3:0.1f} ms")
-            events = m_ev
-            event_id = dict(ba=1, da=2)
+            # Correct jitter
+            events, _ = utils.triggerCorrection(raw_meg, subject, plot=False)
+            events[events[:, 2] == 181, 2] = 1
+            events[events[:, 2] == 182, 2] = 2
+            assert np.in1d(events[:, 2], (1, 2)).all()
+            max_off = cdist(m_ev[:, :1], events[:, :1]).min(axis=0).max()
+            assert max_off < 50, max_off
         else:
-            events = np.zeros((0, 3), int)
-            event_id = dict()
+            # TODO: Need at least one dummy event for MNE-BIDS-Pipeline to work
+            # but put it far enough out that it won't lead to empty epochs
+            events = np.array([[raw_meg.first_samp + int(round(raw_meg.info["sfreq"])), 0, event_id["dummy"]]], int)
         task, run = blocks[block]
         int(subject[1:])  # make sure it's an int
         bids_subject = subject[1:]  # remove "G"

@@ -4,7 +4,7 @@ import numpy as np
 import copy
 
 
-def triggerCorrection(raw, subject_MEG):
+def triggerCorrection(raw, subject_MEG, *, plot=True):
     """Adjust trigger timing based on MEG audio channel.
 
     Parameters
@@ -12,13 +12,15 @@ def triggerCorrection(raw, subject_MEG):
     raw : instance of Raw
     subject_MEG : string
         Used for specifying special thresholds for certain subjects
-        
+    plot : bool
+        If True (default), open diagnostic plot.
+
     Returns
     -------
     events_corrected : array, shape (m, 3)
         The events with corrected timing.
     AD_delta : list of integers
-        The audio delay values (i.e. offset between normal triggers and 
+        The audio delay values (i.e. offset between normal triggers and
         detected sound onset in audio channel signal), in ms.
     """
 
@@ -78,28 +80,29 @@ def triggerCorrection(raw, subject_MEG):
             missing.append(i)
     # discard events which could not be corrected
     events_corrected = np.delete(events_corrected, missing, 0)
-    print("Could not correct", len(missing), "events - these were discarded!")
+    if missing:
+        print("Could not correct", len(missing), "events - these were discarded!")
 
     # histogram showing the distribution of audio delays
-    n, bins, patches = plt.hist(
-        x=AD_delta, bins="auto", color="#0504aa", alpha=0.7, rwidth=0.85
-    )
-    plt.grid(axis="y", alpha=0.75)
-    plt.xlabel("Delay (ms)")
-    plt.ylabel("Frequency")
-    plt.title("Audio Detector Delays")
-    plt.text(
-        70,
-        50,
-        r"$mean="
-        + str(round(np.mean(AD_delta)))
-        + ", std="
-        + str(round(np.std(AD_delta)))
-        + "$",
-    )
-    maxfreq = n.max()
-    # set a clean upper y-axis limit
-    plt.ylim(ymax=np.ceil(maxfreq / 10) * 10 if maxfreq % 10 else maxfreq + 10)
+    if plot:
+        _, ax = plt.subplots(layout="constrained")
+        n, bins, patches = ax.hist(
+            x=AD_delta, bins="auto", color="#0504aa", alpha=0.7, rwidth=0.85
+        )
+        ax.grid(axis="y", alpha=0.75)
+        ax.set(xlabel="Delay (ms)", ylabel="Frequency", title="Audio Detector Delays")
+        ax.text(
+            70,
+            50,
+            r"$mean="
+            + str(round(np.mean(AD_delta)))
+            + ", std="
+            + str(round(np.std(AD_delta)))
+            + "$",
+        )
+        maxfreq = n.max()
+        # set a clean upper y-axis limit
+        ax.ylim(ymax=np.ceil(maxfreq / 10) * 10 if maxfreq % 10 else maxfreq + 10)
 
     return events_corrected, AD_delta
 
