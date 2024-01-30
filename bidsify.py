@@ -15,10 +15,10 @@ Done
 - Add reference regression to MNE-BIDS-Pipeline
 - Incorporate Yifan's bad channels
 - Incorporate Judy's manual -trans.fif coregistration
+- Incorporate Judy's bad marker removal
 
 Todo
 ----
-- Figure out bad marker stuff?
 - Compare autoreject, LOF, and EEG-find-bad-channels-maxwell
 - Add annotations for speaking and listening
   (https://github.com/Macquarie-MEG-Research/natural_conversations/blob/main/align_and_segment_audios.py)
@@ -90,6 +90,19 @@ blocks = dict(  # to BIDS task and run
 assert "empty" not in blocks
 event_id = dict(ba=1, da=2, dummy=99)
 
+bad_coils = {
+    "G01": [0],
+    "G02": [2],
+    "G06": [0],
+    "G08": [0],
+    "G13": [3],
+    "G18": [4],
+    "G24": [3],
+    "G28": [3],
+    "G29": [1],
+    "G32": [1],
+}
+
 # BIDS stuff
 name = "natural-conversations"
 datatype = suffix = "meg"
@@ -160,6 +173,14 @@ for subject in subjects:
             fname = glob.glob(str(pattern))
             assert len(fname) == 1, (key, pattern, fname)
             fnames[key] = fname[0]
+        # Until https://github.com/mne-tools/mne-python/pull/12394 lands
+        if subject in bad_coils:
+            if block == list(blocks)[0]:
+                print(f"    Removing {len(bad_coils[subject])} bad coil(s) ...")
+            mrk = mne.io.kit.read_mrk(fnames["mrk"])
+            elp = mne.io.kit.coreg._read_dig_kit(fnames["elp"])
+            fnames["mrk"] = np.delete(mrk, bad_coils[subject], 0)
+            fnames["elp"] = np.delete(elp, np.array(bad_coils[subject]) + 3, 0)
         raw_meg = mne.io.read_raw_kit(
             **fnames,
             stim=[166, *range(176, 190)],

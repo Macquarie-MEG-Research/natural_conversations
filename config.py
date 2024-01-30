@@ -29,13 +29,16 @@ h_freq = 40.0
 epochs_decim = 5
 process_rest = True
 
-regress_artifact = dict(picks="meg", picks_artifact=["MISC 001", "MISC 002", "MISC 003"])
+regress_artifact = dict(
+    picks="meg",
+    picks_artifact=["MISC 001", "MISC 002", "MISC 003"],
+)
 
 spatial_filter = 'ssp'
 n_proj_ecg = dict(n_mag=1, n_eeg=0)
 n_proj_eog = dict(n_mag=1, n_eeg=1)
 
-reject = {'eeg': 200e-6, 'mag': 2000e-15}
+reject = {'eeg': 100e-6, 'mag': 5000e-15}
 conditions = ["ba", "da", "dummy"]  # dummy just to make event processing happy
 epochs_tmin = -0.2
 epochs_tmax = 0.5
@@ -44,7 +47,7 @@ baseline = (None, 0)
 run_source_estimation = True
 subjects_dir = bids_root / "derivatives" / "freesurfer" / "subjects"
 use_template_mri = "fsaverage"
-adjust_coreg = True  # TODO: Add option to use manual -trans.fif files
+adjust_coreg = True  # use head-coord fiducials to align with fsaverage MRI
 spacing = "oct6"
 mindist = 1
 inverse_method = "dSPM"
