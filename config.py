@@ -12,12 +12,14 @@ from pathlib import Path
 on_error = "debug"
 
 study_name = "natural-conversations"
-data_root = (Path(__file__).parent / ".." / "Natural_Conversations_study").resolve()
-bids_root = data_root / f'{study_name}-bids'
+bids_root = (
+    Path(__file__).parent / ".." / "Natural_Conversations_study" / "analysis"
+    / f'{study_name}-bids'
+).resolve()
 interactive = False
 sessions = "all"
 task = "conversation"
-subjects = ["01"]  # "all" TODO: Process all
+subjects = "all"  # ["01"]
 runs = ["01", "02", "03", "04", "05", "06"]
 
 ch_types = ["meg", "eeg"]

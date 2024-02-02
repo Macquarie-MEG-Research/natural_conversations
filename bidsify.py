@@ -106,9 +106,9 @@ bad_coils = {
 # BIDS stuff
 name = "natural-conversations"
 datatype = suffix = "meg"
-this_path = Path(__file__).parent
-data_root = this_path / ".." / "Natural_Conversations_study"
-bids_root = data_root / f"{name}-bids"
+data_root = Path(__file__).parents[1] / "Natural_Conversations_study"
+analysis_root = data_root / "analysis"
+bids_root = analysis_root / f"{name}-bids"
 bids_root.mkdir(exist_ok=True)
 mne_bids.make_dataset_description(
     path=bids_root,
@@ -142,13 +142,15 @@ del cf
 
 # Load bad channels
 bads = {
-    ch_type: pd.read_csv(data_root / "bads" / f"{ch_type}_bad_channels_eyeballing.csv")
+    ch_type: pd.read_csv(
+        analysis_root / "bads" / f"{ch_type}_bad_channels_eyeballing.csv"
+    )
     for ch_type in ("meg", "eeg")
 }
 for subject in subjects:
     print(f"Subject {subject}...")
     # Set up -trans.fif: convert fs fiducials to subject's coord frame
-    trans = data_root / "coreg" / f"{subject}-trans.fif"
+    trans = analysis_root / "coreg" / f"{subject}-trans.fif"
     assert trans.is_file()
     trans = mne.transforms.invert_transform(mne.read_trans(trans))
     assert trans["from"] == FIFF.FIFFV_COORD_MRI
