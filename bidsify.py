@@ -12,19 +12,22 @@ Done
 - Align MEG and EEG and concatenate channels
 - Check jitter of triggers and auditory events on MEG for localiser
 - Incorporate fixed/improved auditory localiser trigger timing
+- Add reference regression to MNE-BIDS-Pipeline
+- Incorporate Yifan's bad channels
+- Incorporate Judy's manual -trans.fif coregistration
+- Incorporate Judy's bad marker removal
 
 Todo
 ----
-- Mark channels as bad somehow (automatic? PTP/flat? Could inspect...)
-- Add TSPCA or reference regression to MNE-BIDS-Pipeline
+- Compare autoreject, LOF, and EEG-find-bad-channels-maxwell
 - Add annotations for speaking and listening
   (https://github.com/Macquarie-MEG-Research/natural_conversations/blob/main/align_and_segment_audios.py)
   using 1-sec segments and run CSP
 - Run STRF-type analysis on M/EEG using auditory
-- Source localization using fsaverage using MBP
 - Anonymize for eventual sharing
 - Improve BIDS descriptions and authors
 - Set tasks properly in BIDS formatting and update MNE-BIDS-Pipeline to handle it
+- Maybe drop irrelevant MISC channels
 
 Notes
 -----
@@ -37,12 +40,15 @@ Notes
 - Repetition (B2, B4) are 2 repetition blocks of 3 mins each, same as conversation
 """  # noqa: E501
 
+import copy
 import glob
 from pathlib import Path
 
 import mne
 import mne_bids
+from mne.io.constants import FIFF
 import numpy as np
+import pandas as pd
 from scipy.spatial.distance import cdist
 
 import utils  # local module
@@ -70,23 +76,39 @@ ch_types_map = dict(ECG="ecg", EOG="eog")
 min_dur = 0.002  # for events
 
 subjects = tuple(f"G{s:02d}" for s in range(1, 28))
+manual_coreg = True  # use Judy's manual coregistration -trans.fif files to adjust coreg
 blocks = dict(  # to BIDS task and run
     B1=("conversation", "01"),
     B2=("conversation", "02"),
     B3=("conversation", "03"),
     B4=("conversation", "04"),
     B5=("conversation", "05"),
-    localiser=("conversation", "06"),  # ("localizer", "01"),  # TODO: Revert
+    # TODO: Revert the wrong task name here once MBP supports multiple tasks
+    localiser=("conversation", "06"),  # ("localizer", "01"),
     resting=("rest", None),
 )
+assert "empty" not in blocks
 event_id = dict(ba=1, da=2, dummy=99)
+
+bad_coils = {
+    "G01": [0],
+    "G02": [2],
+    "G06": [0],
+    "G08": [0],
+    "G13": [3],
+    "G18": [4],
+    "G24": [3],
+    "G28": [3],
+    "G29": [1],
+    "G32": [1],
+}
 
 # BIDS stuff
 name = "natural-conversations"
 datatype = suffix = "meg"
-this_path = Path(__file__).parent
-data_root = this_path / ".." / "Natural_Conversations_study"
-bids_root = data_root / f"{name}-bids"
+data_root = Path(__file__).parents[1] / "Natural_Conversations_study"
+analysis_root = data_root / "analysis"
+bids_root = analysis_root / f"{name}-bids"
 bids_root.mkdir(exist_ok=True)
 mne_bids.make_dataset_description(
     path=bids_root,
@@ -107,14 +129,39 @@ This dataset contains M/EEG data.
 The data were converted with MNE-BIDS:
 
 - Appelhoff, S., Sanderson, M., Brooks, T., Vliet, M., Quentin, R., Holdgraf, C., Chaumon, M., Mikulan, E., Tavabi, K., Höchenberger, R., Welke, D., Brunner, C., Rockhill, A., Larson, E., Gramfort, A. and Jas, M. (2019). MNE-BIDS: Organizing electrophysiological data into the BIDS format and facilitating their analysis. Journal of Open Source Software 4: (1896). https://doi.org/10.21105/joss.01896
-- Niso, G., Gorgolewski, K. J., Bock, E., Brooks, T. L., Flandin, G., Gramfort, A., Henson, R. N., Jas, M., Litvak, V., Moreau, J., Oostenveld, R., Schoffelen, J., Tadel, F., Wexler, J., Baillet, S. (2018). MEG-BIDS, the brain imaging data structure extended to magnetoencephalography. Scientific Data, 5, 180110. https://doi.org/10.1038/sdata.2018.110
+- Niso, G., Gorgolewski, K. J., Bock, E., Brooks, T. L., Flandin, G., Gramfort, A., Henson, R. N., Jas, M., Litvak, V., Moreau, J., Oostenveld, R., Schoffelen, J., Tadel, F., Wexler, J., Baillet, S. (2018). MEG-BIDS, the brain imaging data structure extended to magnetoencephalography. Scient ic Data, 5, 180110. https://doi.org/10.1038/sdata.2018.110
 """.strip())
+subjects_dir = bids_root / "derivatives" / "freesurfer" / "subjects"
+subjects_dir.mkdir(parents=True, exist_ok=True)
+mne.datasets.fetch_fsaverage(subjects_dir=subjects_dir)  # put fsaverage in there
+fs_fids, cf = mne.coreg.read_fiducials(
+    subjects_dir / "fsaverage" / "bem" / "fsaverage-fiducials.fif"
+)
+assert cf == FIFF.FIFFV_COORD_MRI
+del cf
 
+# Load bad channels
+bads = {
+    ch_type: pd.read_csv(
+        analysis_root / "bads" / f"{ch_type}_bad_channels_eyeballing.csv"
+    )
+    for ch_type in ("meg", "eeg")
+}
 for subject in subjects:
     print(f"Subject {subject}...")
+    # Set up -trans.fif: convert fs fiducials to subject's coord frame
+    trans = analysis_root / "coreg" / f"{subject}-trans.fif"
+    assert trans.is_file()
+    trans = mne.transforms.invert_transform(mne.read_trans(trans))
+    assert trans["from"] == FIFF.FIFFV_COORD_MRI
+    assert trans["to"] == FIFF.FIFFV_COORD_HEAD
+    subj_fids = copy.deepcopy(fs_fids)
+    for fid in subj_fids:
+        fid["coord_frame"] = FIFF.FIFFV_COORD_HEAD
+        fid["r"] = mne.transforms.apply_trans(trans, fid["r"])
+    # Set bad channels to be the same for all runs
+    subj_bads = None
     for block in blocks:
-        if block == "empty" and subject in no_empty_subjects:
-            continue  # missing for this one subject
         print(f"  Block {block}...")
         # MEG
         subject_root = data_root / f"{subject}"
@@ -128,6 +175,14 @@ for subject in subjects:
             fname = glob.glob(str(pattern))
             assert len(fname) == 1, (key, pattern, fname)
             fnames[key] = fname[0]
+        # Until https://github.com/mne-tools/mne-python/pull/12394 lands
+        if subject in bad_coils:
+            if block == list(blocks)[0]:
+                print(f"    Removing {len(bad_coils[subject])} bad coil(s) ...")
+            mrk = mne.io.kit.read_mrk(fnames["mrk"])
+            elp = mne.io.kit.coreg._read_dig_kit(fnames["elp"])
+            fnames["mrk"] = np.delete(mrk, bad_coils[subject], 0)
+            fnames["elp"] = np.delete(elp, np.array(bad_coils[subject]) + 3, 0)
         raw_meg = mne.io.read_raw_kit(
             **fnames,
             stim=[166, *range(176, 190)],
@@ -137,83 +192,84 @@ for subject in subjects:
         ).load_data()
         assert not np.allclose(raw_meg.info["dev_head_t"]["trans"], np.eye(4))
         assert raw_meg.first_time == 0
-        # Empty room data (if present)
-        empty_room = empty_map.get(subject, subject)
-        if empty_room is not None:
-            empty_room = glob.glob(str(data_root / empty_room / "meg" / "*_empty.con"))
-            assert len(empty_room) == 1, empty_room
-            empty_room = mne.io.read_raw_kit(empty_room[0]).load_data()
-            empty_room.info["dev_head_t"] = None
+
+        # Adjust fiducials to make fiducial-based coregistration work
+        if manual_coreg:
+            for fid, fid_new in zip(raw_meg.info["dig"], subj_fids):
+                for key in ("kind", "coord_frame", "ident"):
+                    assert fid[key] == fid_new[key], (key, fid[key], fid_new[key])
+                fid["r"][:] = fid_new["r"]
+
         # EEG
-        if block != "empty":
-            eeg_fname = glob.glob(str(subject_root / "eeg" / f"*{block}_new.vhdr"))
-            if len(eeg_fname) == 0:
-                eeg_fname = glob.glob(str(subject_root / "eeg" / f"*{block}.vhdr"))
-            assert len(eeg_fname) == 1
-            eeg_fname = eeg_fname[0]
-            raw_eeg = mne.io.read_raw_brainvision(eeg_fname).load_data()
-            raw_eeg.rename_channels(eeg_renames)
-            raw_eeg.set_channel_types(ch_types_map)
-            assert raw_eeg.first_time == 0
-            assert raw_eeg.info["sfreq"] == raw_meg.info["sfreq"]
-            mne.add_reference_channels(raw_eeg, "FCz", copy=False)
-            raw_eeg.set_eeg_reference(["FCz"])
-            assert raw_eeg.ch_names[-1] == "FCz"
-            raw_eeg.set_montage("standard_1020")
-            # fix some accounting that MNE-Python should probably take care of for us
-            with raw_eeg.info._unlock():
-                for ch in raw_eeg.info["chs"]:
-                    ch["loc"][3:6] = raw_eeg.info["chs"][-1]["loc"][3:6]
-                raw_eeg.info["custom_ref_applied"] = 0
-            raw_eeg.set_eeg_reference(projection=True)
-            if block.startswith("B"):
-                trig_offset = int(block[1]) - 1
-            else:
-                trig_offset = 0
-            meg_event = mne.find_events(
-                raw_meg,
-                stim_channel=raw_meg.ch_names[181 + trig_offset],
-                min_duration=min_dur,
-            )[:1]
-            eeg_event = mne.events_from_annotations(
-                raw_eeg,
-                event_id={f"Stimulus/S {53 + trig_offset}": 1},
-            )[0][:1]
-            meg_samp = meg_event[0, 0]
-            eeg_samp = eeg_event[0, 0]
-            # Instead of cropping MEG, let's just zero-order hold the first or last EEG
-            # sample. This will make timing of events align with the original MEG
-            # data.
-            if eeg_samp < meg_samp:
-                n_pad = meg_samp - eeg_samp
-                raw_eeg_pad = raw_eeg.copy().crop(0, (n_pad - 1) / raw_eeg.info["sfreq"])
-                assert len(raw_eeg_pad.times) == n_pad
-                raw_eeg_pad._data[:] = raw_eeg[:, 0][0]
-                raw_eeg_pad.set_annotations(None)
-                raw_eeg = mne.concatenate_raws([raw_eeg_pad, raw_eeg])
-                del raw_eeg_pad
-            elif eeg_samp > meg_samp:
-                raw_eeg.crop((eeg_samp - meg_samp) / raw_eeg.info["sfreq"], None)
-            if len(raw_eeg.times) < len(raw_meg.times):
-                n_pad = len(raw_meg.times) - len(raw_eeg.times)
-                raw_eeg_pad = raw_eeg.copy().crop(0, (n_pad - 1) / raw_eeg.info["sfreq"])
-                assert len(raw_eeg_pad.times) == n_pad
-                raw_eeg_pad._data[:] = raw_eeg[:, -1][0]
-                raw_eeg_pad.set_annotations(None)
-                raw_eeg = mne.concatenate_raws([raw_eeg, raw_eeg_pad])
-                del raw_eeg_pad
-            elif len(raw_eeg.times) > len(raw_meg.times):
-                raw_eeg.crop(0, (len(raw_meg.times) - 1) / raw_eeg.info["sfreq"])
-            extra_idx = np.where([d["kind"] == 4 for d in raw_meg.info["dig"]])[0][0]
-            for di, d in enumerate(raw_eeg.info["dig"][3:]):  # omit fiducials
-                raw_meg.info["dig"].insert(extra_idx + di, d)
-            raw_eeg.info["dig"][:] = raw_meg.info["dig"]
-            for key in ("dev_head_t", "description"):
+        eeg_fname = glob.glob(str(subject_root / "eeg" / f"*{block}_new.vhdr"))
+        if len(eeg_fname) == 0:
+            eeg_fname = glob.glob(str(subject_root / "eeg" / f"*{block}.vhdr"))
+        assert len(eeg_fname) == 1
+        eeg_fname = eeg_fname[0]
+        raw_eeg = mne.io.read_raw_brainvision(eeg_fname).load_data()
+        raw_eeg.rename_channels(eeg_renames)
+        raw_eeg.set_channel_types(ch_types_map)
+        assert raw_eeg.first_time == 0
+        assert raw_eeg.info["sfreq"] == raw_meg.info["sfreq"]
+        mne.add_reference_channels(raw_eeg, "FCz", copy=False)
+        assert raw_eeg.ch_names[-1] == "FCz"
+        raw_eeg.set_montage("standard_1020")
+        raw_eeg.set_eeg_reference("average")
+        # fix some accounting that MNE-Python should probably take care of for us
+        with raw_eeg.info._unlock():
+            # for ch in raw_eeg.info["chs"]:
+            #     ch["loc"][3:6] = raw_eeg.info["chs"][-1]["loc"][3:6]
+            raw_eeg.info["custom_ref_applied"] = 0
+        raw_eeg.set_eeg_reference(projection=True)
+        if block.startswith("B"):
+            trig_offset = int(block[1]) - 1
+        else:
+            trig_offset = 0
+        meg_event = mne.find_events(
+            raw_meg,
+            stim_channel=raw_meg.ch_names[181 + trig_offset],
+            min_duration=min_dur,
+        )[:1]
+        eeg_event = mne.events_from_annotations(
+            raw_eeg,
+            event_id={f"Stimulus/S {53 + trig_offset}": 1},
+        )[0][:1]
+        meg_samp = meg_event[0, 0]
+        eeg_samp = eeg_event[0, 0]
+        # Instead of cropping MEG, let's just zero-order hold the first or last EEG
+        # sample. This will make timing of events align with the original MEG
+        # data.
+        if eeg_samp < meg_samp:
+            n_pad = meg_samp - eeg_samp
+            raw_eeg_pad = raw_eeg.copy().crop(0, (n_pad - 1) / raw_eeg.info["sfreq"])
+            assert len(raw_eeg_pad.times) == n_pad
+            raw_eeg_pad._data[:] = raw_eeg[:, 0][0]
+            raw_eeg_pad.set_annotations(None)
+            raw_eeg = mne.concatenate_raws([raw_eeg_pad, raw_eeg])
+            del raw_eeg_pad
+        elif eeg_samp > meg_samp:
+            raw_eeg.crop((eeg_samp - meg_samp) / raw_eeg.info["sfreq"], None)
+        if len(raw_eeg.times) < len(raw_meg.times):
+            n_pad = len(raw_meg.times) - len(raw_eeg.times)
+            raw_eeg_pad = raw_eeg.copy().crop(0, (n_pad - 1) / raw_eeg.info["sfreq"])
+            assert len(raw_eeg_pad.times) == n_pad
+            raw_eeg_pad._data[:] = raw_eeg[:, -1][0]
+            raw_eeg_pad.set_annotations(None)
+            raw_eeg = mne.concatenate_raws([raw_eeg, raw_eeg_pad])
+            del raw_eeg_pad
+        elif len(raw_eeg.times) > len(raw_meg.times):
+            raw_eeg.crop(0, (len(raw_meg.times) - 1) / raw_eeg.info["sfreq"])
+        extra_idx = np.where([d["kind"] == 4 for d in raw_meg.info["dig"]])[0][0]
+        for di, d in enumerate(raw_eeg.info["dig"][3:]):  # omit fiducials
+            raw_meg.info["dig"].insert(extra_idx + di, d)
+        raw_eeg.info["dig"][:] = raw_meg.info["dig"]
+        for key in ("dev_head_t", "description"):
+            raw_eeg.info[key] = raw_meg.info[key]
+        with raw_eeg.info._unlock():
+            for key in ("highpass", "lowpass"):
                 raw_eeg.info[key] = raw_meg.info[key]
-            with raw_eeg.info._unlock():
-                for key in ("highpass", "lowpass"):
-                    raw_eeg.info[key] = raw_meg.info[key]
-            raw_meg.add_channels([raw_eeg])
+        raw_meg.add_channels([raw_eeg])
+
         if block == "localiser":
             # Figure out our first-order coefficient
             mba = mne.find_events(raw_meg, stim_channel=raw_meg.ch_names[181], min_duration=min_dur)
@@ -258,6 +314,46 @@ for subject in subjects:
             # TODO: Need at least one dummy event for MNE-BIDS-Pipeline to work
             # but put it far enough out that it won't lead to empty epochs
             events = np.array([[raw_meg.first_samp + int(round(raw_meg.info["sfreq"])), 0, event_id["dummy"]]], int)
+        # Add bads
+        assert raw_meg.info["bads"] == []
+        if subj_bads is None:  # first block
+            subj_bads = list()
+            for ch_type in ("meg", "eeg"):
+                these_bads = bads[ch_type].query(f"subject == '{subject}'")  # task == '{block}'
+                these_bads = these_bads["bad_channels"].values
+                for block_bads in these_bads:
+                    assert isinstance(block_bads, str), type(block_bads)
+                    block_bads = np.array(eval(block_bads))
+                    assert len(block_bads) and block_bads.dtype == int
+                    if ch_type == "eeg":
+                        which_names = raw_eeg.ch_names
+                    else:
+                        assert ch_type == "meg"
+                        which_names = raw_meg.ch_names
+                    subj_bads += [which_names[pick] for pick in block_bads]
+                    del block_bads
+                del these_bads
+            subj_bads = sorted(set(subj_bads), key=lambda x: raw_meg.ch_names.index(x))
+            print(f"    Bad channels ({len(subj_bads)}): {subj_bads}")
+
+        # All the same bads
+        assert raw_meg.info["bads"] == []
+        raw_meg.info["bads"] = subj_bads
+
+        # Empty room data (if present)
+        empty_room = empty_map.get(subject, subject)
+        if empty_room is not None:
+            empty_room = glob.glob(str(data_root / empty_room / "meg" / "*_empty.con"))
+            assert len(empty_room) == 1, empty_room
+            empty_room = mne.io.read_raw_kit(empty_room[0]).load_data()
+            empty_room.info["dev_head_t"] = None
+            assert empty_room.info["bads"] == []
+            # need to skip EEG
+            empty_room.info["bads"] = [
+                ch_name for ch_name in subj_bads if ch_name in empty_room.ch_names
+            ]
+
+        # Write to BIDS
         task, run = blocks[block]
         int(subject[1:])  # make sure it's an int
         bids_subject = subject[1:]  # remove "G"

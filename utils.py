@@ -57,8 +57,8 @@ def triggerCorrection(raw, subject_MEG, *, plot=True):
     stim_tps = np.where(new_stim_ch==1)[0]
 
     # compare number of events from trigger channels & from AD
-    print("Number of events from trigger channels:", events.shape[0])
-    print("Number of events from audio channel (166) signal:", stim_tps.shape[0])
+    print(f"    Number of events from trigger channels: {events.shape[0]}")
+    print(f"    Number of events from audio channel (166) signal: {stim_tps.shape[0]}")
 
 
     # apply timing correction onto the events array
@@ -81,7 +81,7 @@ def triggerCorrection(raw, subject_MEG, *, plot=True):
     # discard events which could not be corrected
     events_corrected = np.delete(events_corrected, missing, 0)
     if missing:
-        print("Could not correct", len(missing), "events - these were discarded!")
+        print(f"    Could not correct {len(missing)} events - these were discarded!")
 
     # histogram showing the distribution of audio delays
     if plot:

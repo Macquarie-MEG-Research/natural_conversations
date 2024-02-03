@@ -12,38 +12,45 @@ from pathlib import Path
 on_error = "debug"
 
 study_name = "natural-conversations"
-data_root = (Path(__file__).parent / ".." / "Natural_Conversations_study").resolve()
-bids_root = data_root / f'{study_name}-bids'
+bids_root = (
+    Path(__file__).parent / ".." / "Natural_Conversations_study" / "analysis"
+    / f'{study_name}-bids'
+).resolve()
 interactive = False
 sessions = "all"
 task = "conversation"
-subjects = ["01"]  # "all" TODO: Process all
+subjects = "all"  # ["01"]
 runs = ["01", "02", "03", "04", "05", "06"]
 
-use_maxwell_filter = False
-# find_flat_channels_meg = True  # TODO: Enable for files w/o cal + cross-talk
-# find_noisy_channels_meg = True
-# mf_head_origin = (0., 0., 0.04)
 ch_types = ["meg", "eeg"]
 data_type = "meg"
+eeg_reference = "average"
 
 l_freq = None
 h_freq = 40.0
 epochs_decim = 5
 process_rest = True
 
-reject = "autoreject_global"
-conditions = ["ba", "da", "dummy"]  # dummy just to make event processing happy
-epochs_tmin = -0.2
-epochs_tmax = 0.5
-baseline = (None, 0)
+regress_artifact = dict(
+    picks="meg",
+    picks_artifact=["MISC 001", "MISC 002", "MISC 003"],
+)
+
 spatial_filter = 'ssp'
 n_proj_ecg = dict(n_mag=1, n_eeg=0)
 n_proj_eog = dict(n_mag=1, n_eeg=1)
 
-run_source_estimation = False
+reject = {'eeg': 100e-6, 'mag': 5000e-15}
+conditions = ["ba", "da", "dummy"]  # dummy just to make event processing happy
+epochs_tmin = -0.2
+epochs_tmax = 0.5
+baseline = (None, 0)
+
+run_source_estimation = True
+subjects_dir = bids_root / "derivatives" / "freesurfer" / "subjects"
+use_template_mri = "fsaverage"
+adjust_coreg = True  # use head-coord fiducials to align with fsaverage MRI
 spacing = "oct6"
 mindist = 1
-source_info_path_update = {"processing": "clean", "suffix": "epo"}
 inverse_method = "dSPM"
-noise_cov = "rest"
+noise_cov = (None, 0.0)
