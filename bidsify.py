@@ -16,16 +16,16 @@ Done
 - Incorporate Yifan's bad channels
 - Incorporate Judy's manual -trans.fif coregistration
 - Incorporate Judy's bad marker removal
+- Judy add Yifan's annotations for speaking and listening using (-1, 1) sec segments
+- Try CSP decoding
 
 Todo
 ----
 - Compare autoreject, LOF, and EEG-find-bad-channels-maxwell
-- Add annotations for speaking and listening
-  (https://github.com/Macquarie-MEG-Research/natural_conversations/blob/main/align_and_segment_audios.py)
-  using 1-sec segments and run CSP
 - Run STRF-type analysis on M/EEG using auditory
 - Anonymize for eventual sharing
 - Improve BIDS descriptions and authors
+- Judy run scripts end-to-end on her machine to make sure everything reproduces
 - Set tasks properly in BIDS formatting and update MNE-BIDS-Pipeline to handle it
 - Maybe drop irrelevant MISC channels
 
@@ -88,7 +88,7 @@ blocks = dict(  # to BIDS task and run
     resting=("rest", None),
 )
 assert "empty" not in blocks
-event_id = dict(ba=1, da=2, dummy=99)
+event_id = dict(ba=1, da=2, conversation=3, repetition=4)
 
 bad_coils = {
     "G01": [0],
@@ -139,6 +139,36 @@ fs_fids, cf = mne.coreg.read_fiducials(
 )
 assert cf == FIFF.FIFFV_COORD_MRI
 del cf
+
+
+def get_participant_turns(*, subject, block):
+    """Get participant turn annotations."""
+    min_event_duration = 1 # seconds
+    # note: segments in repetition block are shorter (need to use 1s to catch most of them)
+    turns_path = analysis_root / "audios_metadata_labelled" / f"{subject}_{block}.csv"
+    assert turns_path.is_file(), turns_path
+    df = pd.read_csv(turns_path)
+    participant_turns = []
+    for _, row in df.iterrows():
+        if row['person'] == 'participant' \
+            and (row['end']-row['start']) > min_event_duration \
+            and bool(row['is_full_turn']):
+                participant_turns.append([row['start'],row['end']])
+    # Turn into onset/duration/description (annotation)
+    if block == 'B1' or block == 'B3' or block == 'B5':
+        ttype = 'conversation'
+    else:
+        assert block in ('B2', 'B4'), block
+        ttype = 'repetition'
+    print(f"    {len(participant_turns):2d} {ttype} turns")
+    onset = []
+    duration = []
+    for turn in participant_turns:
+        onset.append(turn[0])
+        duration.append(turn[1] - turn[0])
+    description = [ttype] * len(onset)
+    return onset, duration, description
+
 
 # Load bad channels
 bads = {
@@ -310,10 +340,14 @@ for subject in subjects:
             assert np.in1d(events[:, 2], (1, 2)).all()
             max_off = cdist(m_ev[:, :1], events[:, :1]).min(axis=0).max()
             assert max_off < 50, max_off
+        elif block == "resting":
+            events = None
         else:
-            # TODO: Need at least one dummy event for MNE-BIDS-Pipeline to work
-            # but put it far enough out that it won't lead to empty epochs
-            events = np.array([[raw_meg.first_samp + int(round(raw_meg.info["sfreq"])), 0, event_id["dummy"]]], int)
+            assert block in ("B1", "B2", "B3", "B4", "B5"), block
+            raw_meg.set_annotations(mne.Annotations(
+                *get_participant_turns(subject=subject, block=block)
+            ))
+            events = None
         # Add bads
         assert raw_meg.info["bads"] == []
         if subj_bads is None:  # first block
