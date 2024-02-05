@@ -167,6 +167,7 @@ def get_participant_turns(*, subject, block):
         onset.append(turn[0])
         duration.append(turn[1] - turn[0])
     description = [ttype] * len(onset)
+    assert len(onset) > 5, len(onset)
     return onset, duration, description
 
 
@@ -344,9 +345,12 @@ for subject in subjects:
             events = None
         else:
             assert block in ("B1", "B2", "B3", "B4", "B5"), block
-            raw_meg.set_annotations(mne.Annotations(
-                *get_participant_turns(subject=subject, block=block)
-            ))
+            onset, duration, description = get_participant_turns(
+                subject=subject, block=block,
+            )
+            raw_meg.set_annotations(mne.Annotations(onset, duration, description))
+            # TODO: This fails for G15
+            # assert len(raw_meg.annotations) == len(onset), (len(raw_meg.annotations), len(onset))
             events = None
         # Add bads
         assert raw_meg.info["bads"] == []
