@@ -98,8 +98,10 @@ bad_coils = {
 # BIDS stuff
 name = "natural-conversations"
 datatype = suffix = "meg"
-data_root = Path(__file__).parents[1] / "Natural_Conversations_study"
-analysis_root = data_root / "analysis"
+share_root = Path(__file__).parents[1] / "Natural_Conversations_study"
+analysis_root = share_root / "analysis"
+data_root = share_root / "data"
+del share_root
 bids_root = analysis_root / f"{name}-bids"
 bids_root.mkdir(exist_ok=True)
 mne_bids.make_dataset_description(
