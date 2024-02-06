@@ -150,10 +150,7 @@ def get_participant_turns(*, subject, block):
     assert len(block) == 2 and block[0] == "B", block
     block_num = int(block[1])
     assert block_num in range(1, 6)
-    if block_num % 2:  # odd
-        ttype = 'conversation'
-    else:  # even
-        ttype = 'repetition'
+    ttype = 'conversation' if block_num % 2 else 'repetition'
     print(f"    {len(participant_turns):2d} {ttype} turns")
     onset = []
     duration = []
