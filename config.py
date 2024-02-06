@@ -18,6 +18,7 @@ interactive = False
 sessions = "all"
 task = "conversation"
 subjects = "all"  # ["01"]
+exclude_subjects = ["20"]  # too many drops during conversation blocks (all epochs!)
 runs = ["01", "02", "03", "04", "05", "06"]
 
 ch_types = ["meg", "eeg"]
@@ -39,7 +40,7 @@ n_proj_ecg = dict(n_mag=2, n_eeg=0)
 n_proj_eog = dict(n_mag=1, n_eeg=1)
 
 # Epoching
-reject = {'eeg': 100e-6, 'mag': 5000e-15}
+reject = {'eeg': 125e-6, 'mag': 5000e-15}
 conditions = ["ba", "da", "conversation", "repetition"]
 epochs_tmin = -1
 epochs_tmax = 1

@@ -5,9 +5,9 @@ https://mqoutlook.sharepoint.com/sites/Natural_Conversations/
 Done
 ----
 - File sanity/existence check
-- dev_head_t using _ini.mrk (no checking of others!)
-- Checked for acceptable drift rate
-- Checked event numbers in localiser
+- Compute dev_head_t using _ini.mrk (no checking of others!)
+- Check for acceptable drift rate
+- Check event numbers in localiser
 - Add EEG sensor positions
 - Align MEG and EEG and concatenate channels
 - Check jitter of triggers and auditory events on MEG for localiser
@@ -17,28 +17,18 @@ Done
 - Incorporate Judy's manual -trans.fif coregistration
 - Incorporate Judy's bad marker removal
 - Judy add Yifan's annotations for speaking and listening using (-1, 1) sec segments
-- Try CSP decoding
+- CSP decoding
+- Eyeball subject drop logs for bad channels
 
 Todo
 ----
-- Eyeball subject drop logs for bad channels
+- Add end-of turn annotations as well
 - Compare autoreject, LOF, and EEG-find-bad-channels-maxwell
 - Run STRF-type analysis on M/EEG using auditory
 - Anonymize for eventual sharing
 - Improve BIDS descriptions and authors
-- Judy run scripts end-to-end on her machine to make sure everything reproduces
+- Yifan run scripts end-to-end on cloud infra to make sure everything reproduces
 - Set tasks properly in BIDS formatting and update MNE-BIDS-Pipeline to handle it
-- Maybe drop irrelevant MISC channels
-
-Notes
------
-- For localizer data, triggers on MEG channel 181/ba and 182/da. Auditory on ch166.
-- For resting state, triggers on 181 at the start of the block.
-- Conversation (B1, B2, B3)
-  - Trigger at beginning of each block (ch181/B1, ch182/B2, ch183/B3, etc.)
-  - The interviewer speech recorded or ch166, participant speech on ch167
-  - Trigger at the beginning of each block can map the timing between EEG and MEG
-- Repetition (B2, B4) are 2 repetition blocks of 3 mins each, same as conversation
 """  # noqa: E501
 
 import copy
@@ -157,10 +147,12 @@ def get_participant_turns(*, subject, block):
             and bool(row['is_full_turn']):
                 participant_turns.append([row['start'],row['end']])
     # Turn into onset/duration/description (annotation)
-    if block == 'B1' or block == 'B3' or block == 'B5':
+    assert len(block) == 2 and block[0] == "B", block
+    block_num = int(block[1])
+    assert block_num in range(1, 6)
+    if block_num % 2:  # odd
         ttype = 'conversation'
-    else:
-        assert block in ('B2', 'B4'), block
+    else:  # even
         ttype = 'repetition'
     print(f"    {len(participant_turns):2d} {ttype} turns")
     onset = []
@@ -338,8 +330,7 @@ for subject in subjects:
             print(f"  Drift rate: {(1 - first_ord) * 1e6:+0.1f} PPM")
             # Correct jitter
             events, _ = utils.triggerCorrection(raw_meg, subject, plot=False)
-            events[events[:, 2] == 181, 2] = 1
-            events[events[:, 2] == 182, 2] = 2
+            events[:, 2] -= 180  # 181, 182 -> 1, 2
             assert np.in1d(events[:, 2], (1, 2)).all()
             max_off = cdist(m_ev[:, :1], events[:, :1]).min(axis=0).max()
             assert max_off < 50, max_off
@@ -351,8 +342,6 @@ for subject in subjects:
                 subject=subject, block=block,
             )
             raw_meg.set_annotations(mne.Annotations(onset, duration, description))
-            # TODO: This fails for G15
-            # assert len(raw_meg.annotations) == len(onset), (len(raw_meg.annotations), len(onset))
             events = None
         # Add bads
         assert raw_meg.info["bads"] == []
