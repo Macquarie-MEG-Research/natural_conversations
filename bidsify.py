@@ -21,6 +21,7 @@ Done
 
 Todo
 ----
+- Eyeball subject drop logs for bad channels
 - Compare autoreject, LOF, and EEG-find-bad-channels-maxwell
 - Run STRF-type analysis on M/EEG using auditory
 - Anonymize for eventual sharing
@@ -60,6 +61,7 @@ n_das_eeg = dict(G15=99, G18=98, G19=99)
 drift_tols = dict(G04=0.08, G09=0.026, G15=0.024)
 bad_envelope_subjects = ("G04", "G08", "G11", "G13", "G22")  # naive envelope fails
 empty_map = dict(G02="G01", G05="G06", G13="G01", G18="G17", G20="G19")
+always_bad = ["MEG 043"]  # bad for every subject
 
 eeg_map = """
 Fp1 AF3 AF7 Fz F1 F3 F5 F7 FC1 FC3
@@ -371,6 +373,7 @@ for subject in subjects:
                     subj_bads += [which_names[pick] for pick in block_bads]
                     del block_bads
                 del these_bads
+            subj_bads += always_bad
             subj_bads = sorted(set(subj_bads), key=lambda x: raw_meg.ch_names.index(x))
             print(f"    Bad channels ({len(subj_bads)}): {subj_bads}")
 
@@ -390,6 +393,7 @@ for subject in subjects:
             empty_room.info["bads"] = [
                 ch_name for ch_name in subj_bads if ch_name in empty_room.ch_names
             ]
+        # raise RuntimeError(str(subj_bads))
 
         # Write to BIDS
         task, run = blocks[block]

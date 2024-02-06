@@ -18,7 +18,6 @@ interactive = False
 sessions = "all"
 task = "conversation"
 subjects = "all"  # ["01"]
-exclude_subjects = ["15", "17"]  # TODO: not enough epochs
 runs = ["01", "02", "03", "04", "05", "06"]
 
 ch_types = ["meg", "eeg"]
