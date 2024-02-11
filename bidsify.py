@@ -5,9 +5,9 @@ https://mqoutlook.sharepoint.com/sites/Natural_Conversations/
 Done
 ----
 - File sanity/existence check
-- dev_head_t using _ini.mrk (no checking of others!)
-- Checked for acceptable drift rate
-- Checked event numbers in localiser
+- Compute dev_head_t using _ini.mrk (no checking of others!)
+- Check for acceptable drift rate
+- Check event numbers in localiser
 - Add EEG sensor positions
 - Align MEG and EEG and concatenate channels
 - Check jitter of triggers and auditory events on MEG for localiser
@@ -16,28 +16,19 @@ Done
 - Incorporate Yifan's bad channels
 - Incorporate Judy's manual -trans.fif coregistration
 - Incorporate Judy's bad marker removal
+- Judy add Yifan's annotations for speaking and listening using (-1, 1) sec segments
+- CSP decoding
+- Eyeball subject drop logs for bad channels
 
 Todo
 ----
+- Add end-of turn annotations as well
 - Compare autoreject, LOF, and EEG-find-bad-channels-maxwell
-- Add annotations for speaking and listening
-  (https://github.com/Macquarie-MEG-Research/natural_conversations/blob/main/align_and_segment_audios.py)
-  using 1-sec segments and run CSP
 - Run STRF-type analysis on M/EEG using auditory
 - Anonymize for eventual sharing
 - Improve BIDS descriptions and authors
+- Yifan run scripts end-to-end on cloud infra to make sure everything reproduces
 - Set tasks properly in BIDS formatting and update MNE-BIDS-Pipeline to handle it
-- Maybe drop irrelevant MISC channels
-
-Notes
------
-- For localizer data, triggers on MEG channel 181/ba and 182/da. Auditory on ch166.
-- For resting state, triggers on 181 at the start of the block.
-- Conversation (B1, B2, B3)
-  - Trigger at beginning of each block (ch181/B1, ch182/B2, ch183/B3, etc.)
-  - The interviewer speech recorded or ch166, participant speech on ch167
-  - Trigger at the beginning of each block can map the timing between EEG and MEG
-- Repetition (B2, B4) are 2 repetition blocks of 3 mins each, same as conversation
 """  # noqa: E501
 
 import copy
@@ -60,6 +51,7 @@ n_das_eeg = dict(G15=99, G18=98, G19=99)
 drift_tols = dict(G04=0.08, G09=0.026, G15=0.024)
 bad_envelope_subjects = ("G04", "G08", "G11", "G13", "G22")  # naive envelope fails
 empty_map = dict(G02="G01", G05="G06", G13="G01", G18="G17", G20="G19")
+always_bad = ["MEG 043"]  # bad for every subject
 
 eeg_map = """
 Fp1 AF3 AF7 Fz F1 F3 F5 F7 FC1 FC3
@@ -88,7 +80,7 @@ blocks = dict(  # to BIDS task and run
     resting=("rest", None),
 )
 assert "empty" not in blocks
-event_id = dict(ba=1, da=2, dummy=99)
+event_id = dict(ba=1, da=2, conversation=3, repetition=4)
 
 bad_coils = {
     "G01": [0],
@@ -106,8 +98,10 @@ bad_coils = {
 # BIDS stuff
 name = "natural-conversations"
 datatype = suffix = "meg"
-data_root = Path(__file__).parents[1] / "Natural_Conversations_study"
-analysis_root = data_root / "analysis"
+share_root = Path(__file__).parents[1] / "Natural_Conversations_study"
+analysis_root = share_root / "analysis"
+data_root = share_root / "data"
+del share_root
 bids_root = analysis_root / f"{name}-bids"
 bids_root.mkdir(exist_ok=True)
 mne_bids.make_dataset_description(
@@ -139,6 +133,36 @@ fs_fids, cf = mne.coreg.read_fiducials(
 )
 assert cf == FIFF.FIFFV_COORD_MRI
 del cf
+
+
+def get_participant_turns(*, subject, block):
+    """Get participant turn annotations."""
+    min_event_duration = 1 # seconds
+    # note: segments in repetition block are shorter (need to use 1s to catch most of them)
+    turns_path = analysis_root / "audios_metadata_labelled" / f"{subject}_{block}.csv"
+    assert turns_path.is_file(), turns_path
+    df = pd.read_csv(turns_path)
+    participant_turns = []
+    for _, row in df.iterrows():
+        if row['person'] == 'participant' \
+            and (row['end']-row['start']) > min_event_duration \
+            and bool(row['is_full_turn']):
+                participant_turns.append([row['start'],row['end']])
+    # Turn into onset/duration/description (annotation)
+    assert len(block) == 2 and block[0] == "B", block
+    block_num = int(block[1])
+    assert block_num in range(1, 6)
+    ttype = 'conversation' if block_num % 2 else 'repetition'
+    print(f"    {len(participant_turns):2d} {ttype} turns")
+    onset = []
+    duration = []
+    for turn in participant_turns:
+        onset.append(turn[0])
+        duration.append(turn[1] - turn[0])
+    description = [ttype] * len(onset)
+    assert len(onset) > 5, len(onset)
+    return onset, duration, description
+
 
 # Load bad channels
 bads = {
@@ -305,15 +329,19 @@ for subject in subjects:
             print(f"  Drift rate: {(1 - first_ord) * 1e6:+0.1f} PPM")
             # Correct jitter
             events, _ = utils.triggerCorrection(raw_meg, subject, plot=False)
-            events[events[:, 2] == 181, 2] = 1
-            events[events[:, 2] == 182, 2] = 2
+            events[:, 2] -= 180  # 181, 182 -> 1, 2
             assert np.in1d(events[:, 2], (1, 2)).all()
             max_off = cdist(m_ev[:, :1], events[:, :1]).min(axis=0).max()
             assert max_off < 50, max_off
+        elif block == "resting":
+            events = None
         else:
-            # TODO: Need at least one dummy event for MNE-BIDS-Pipeline to work
-            # but put it far enough out that it won't lead to empty epochs
-            events = np.array([[raw_meg.first_samp + int(round(raw_meg.info["sfreq"])), 0, event_id["dummy"]]], int)
+            assert block in ("B1", "B2", "B3", "B4", "B5"), block
+            onset, duration, description = get_participant_turns(
+                subject=subject, block=block,
+            )
+            raw_meg.set_annotations(mne.Annotations(onset, duration, description))
+            events = None
         # Add bads
         assert raw_meg.info["bads"] == []
         if subj_bads is None:  # first block
@@ -333,6 +361,7 @@ for subject in subjects:
                     subj_bads += [which_names[pick] for pick in block_bads]
                     del block_bads
                 del these_bads
+            subj_bads += always_bad
             subj_bads = sorted(set(subj_bads), key=lambda x: raw_meg.ch_names.index(x))
             print(f"    Bad channels ({len(subj_bads)}): {subj_bads}")
 
@@ -352,6 +381,7 @@ for subject in subjects:
             empty_room.info["bads"] = [
                 ch_name for ch_name in subj_bads if ch_name in empty_room.ch_names
             ]
+        # raise RuntimeError(str(subj_bads))
 
         # Write to BIDS
         task, run = blocks[block]
