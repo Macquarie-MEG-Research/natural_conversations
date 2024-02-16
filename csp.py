@@ -41,10 +41,14 @@ from sklearn.decomposition import PCA
 
 
 #############################################################################
-# Read data
 
-path = Path(__file__).parents[1] / "Natural_Conversations_study" / "analysis" / 'natural-conversations-bids' / 'derivatives' / 'mne-bids-pipeline' / 'sub-01' / 'meg'
-epochs_fname = path / 'sub-01_task-conversation_proc-clean_epo.fif'
+sub = '04'
+path = Path(__file__).parents[1] / "Natural_Conversations_study" / "analysis" / 'natural-conversations-bids' / 'derivatives' / 'mne-bids-pipeline' / 'sub-' + sub / 'meg'
+epochs_fname = path / 'sub-' + sub + '_task-conversation_proc-clean_epo.fif'
+inv_fname = path / 'sub-' + sub + '_task-conversation_inv.fif'
+subjects_dir = '/mnt/d/Work/analysis_ME206/processing/mri/'
+
+# Read data
 epochs = mne.read_epochs(epochs_fname).load_data()
 
 # only select the conditions we are interested in
@@ -58,13 +62,16 @@ print(f"Ranks={ranks} (total={rank})")
 
 # Define the CSP parameters
 contrasts = [("conversation", "repetition")]
-decoding_csp_times = [-1, 0, 1]  # before and after
+#decoding_csp_times = [-1, -0.5, 0, 0.5, 1]  #[-1, 0, 1] # before and after
+#time_bins = [[-1, 0], [ 0, 1]]
 decoding_csp_freqs = {
     'theta': [4, 7],
     'alpha': [8, 13],
     'beta': [14, 30],
+    'gamma': [31, 49],
 }
 n_components = 4
+
 
 # loop through the frequency bands
 for band, (fmin, fmax) in decoding_csp_freqs.items():
@@ -105,21 +112,32 @@ for band, (fmin, fmax) in decoding_csp_freqs.items():
 
     # Printing the results
     print(f"roc_auc: {np.mean(scores)}")
-
+    print(scores)
+    
     # plot CSP patterns
     clf.fit(X, labels)
-    # In theory we should be able to do this, but there is a MNE-Python bug:
+    # In theory we should be able to extract the coef from the classifier:
     # coef = get_coef(clf, "patterns_", inverse_transform=True, verbose=True)
-    # But it doesn't work, so instead do it manually:
+    # but there is a MNE-Python bug, so instead do it manually:
     coef = csp.patterns_[:n_components]
     assert coef.shape == (n_components, pca.estimator.n_components_), coef.shape
     coef = pca.estimator.inverse_transform(coef)
     assert coef.shape == (n_components, len(epochs.ch_names)), coef.shape
     coef = scaler.inverse_transform(coef.T[np.newaxis])[0]
     assert coef.shape == (len(epochs.ch_names), n_components), coef.shape
+
     evoked = mne.EvokedArray(coef, epochs.info, tmin=0)
     fig, axes = plt.subplots(2, n_components, figsize=(n_components * 2, 4), layout="constrained")
     for ci, ch_type in enumerate(("mag", "eeg")):
         fig = evoked.plot_topomap(axes=axes[ci], times=evoked.times, colorbar=False, show=False, ch_type=ch_type)
     fig.suptitle(f"{band}")
-    raise RuntimeError
+
+    # Project sensor-space patterns to source space
+    inv = mne.minimum_norm.read_inverse_operator(inv_fname)
+    stc = mne.minimum_norm.apply_inverse(evoked, inv, 1.0 / 9.0, "dSPM")
+    brain = stc.plot(
+        hemi="split", views=("lat", "med"), initial_time=0.1, subjects_dir=subjects_dir
+    )
+
+    #raise RuntimeError
+    print("Done")
