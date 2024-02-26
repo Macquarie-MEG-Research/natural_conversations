@@ -1,12 +1,14 @@
-
 import librosa
 import soundfile
 from scipy.io import wavfile
 import os
 import mne
 from fast_align_audio import alignment
-import matplotlib.pyplot as plt
+
 import matplotlib
+matplotlib.use('Agg')  # TkAgg does not work
+import matplotlib.pyplot as plt
+
 import numpy as np
 import csv
 # from pyannote.pipeline.typing import PipelineOutput
@@ -28,16 +30,18 @@ from matplotlib import cm
 MIN_SPEECH_SEGMENT_GAP = 1.0
 MIN_SPEECH_SEGMENT_LENGTH = 0.1
 
-# https://github.com/pyannote/pyannote-audio
-vad_pipeline = Pipeline.from_pretrained(
-    # "pyannote/voice-activity-detection",
-    "pyannote/speaker-diarization-3.0",
-    use_auth_token="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")
+need_transcribe = False
+if need_transcribe:
+  # https://github.com/pyannote/pyannote-audio
+  vad_pipeline = Pipeline.from_pretrained(
+      # "pyannote/voice-activity-detection",
+      "pyannote/speaker-diarization-3.0",
+      use_auth_token="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")
 
-print(vad_pipeline)
+  print(vad_pipeline)
 
-whisper_model = whisper.load_model("small.en")
-print(whisper_model)
+  whisper_model = whisper.load_model("small.en")
+  print(whisper_model)
 
 
 def _get_subject_dirs(subject_MEG, local_dir = "./my_folder/"):
@@ -72,18 +76,24 @@ def get_data_for_subject(subject_MEG, local_dir = "./my_folder/"):
 
   return subject_data_file_list, subject_dirs
 
+def return_first_or_none(l):
+  if len(l) > 0:
+    return l[0]
+  else:
+    return None
+
 def get_data_for_subject_task(subject_MEG, task, local_dir = "./my_folder/"):
   # subject_MEG: e.g., "G02"
 
   subject_dirs = _get_subject_dirs(subject_MEG, local_dir)
   # print(subject_dirs)
 
-  fname_raw = glob.glob(subject_dirs["meg_dir"] + "*" + task + ".con")[0]
-  fname_elp = glob.glob(subject_dirs["meg_dir"] + "*.elp")[0]
-  fname_hsp = glob.glob(subject_dirs["meg_dir"] + "*.hsp")[0]
-  fname_mrk = glob.glob(subject_dirs["meg_dir"] + "*_final.mrk")[0]
-  fname_eeg = glob.glob(subject_dirs["eeg_dir"] + "*" + task + ".eeg")[0]
-  fname_vhdr = glob.glob(subject_dirs["eeg_dir"] + "*" + task + ".vhdr")[0]
+  fname_raw = glob.glob(subject_dirs["meg_dir"] + "*" + task + "*.con")[0]
+  fname_elp = return_first_or_none(glob.glob(subject_dirs["meg_dir"] + "*.elp"))
+  fname_hsp = return_first_or_none(glob.glob(subject_dirs["meg_dir"] + "*.hsp"))
+  fname_mrk = return_first_or_none(glob.glob(subject_dirs["meg_dir"] + "*_final.mrk"))
+  fname_eeg = glob.glob(subject_dirs["eeg_dir"] + "*" + task + "*.eeg")[0]
+  fname_vhdr = return_first_or_none(glob.glob(subject_dirs["eeg_dir"] + "*" + task + "*.vhdr"))
 
 
   # .WAV audio data
@@ -148,7 +158,21 @@ def load_meg_data(subject_task_data):
 
   # Raw extraction ch misc 23-29 = triggers
   # ch misc 007 = audio
-  raw = mne.io.read_raw_kit(
+
+  # mrk, elp and hsp need to be provided as a group (all or none)
+  if None in [subject_task_data["meg_file_mrk"], subject_task_data["meg_file_elp"], subject_task_data["meg_file_hsp"]]:
+    raw = mne.io.read_raw_kit(
+        subject_task_data["meg_file"],
+        stim=[*[166], *range(176, 190)],
+        slope="+",
+        stim_code="channel",
+        stimthresh=2,  # 2 for adult (1 for child??)
+        preload=True,
+        allow_unknown_format=False,
+        # verbose=True,
+    )
+  else:
+    raw = mne.io.read_raw_kit(
       subject_task_data["meg_file"],
       mrk=subject_task_data["meg_file_mrk"],
       elp=subject_task_data["meg_file_elp"],
@@ -174,7 +198,7 @@ def denoise_meg_data(raw):
 
   return raw
 
-def filter_meg_data(raw, l_freq=1, h_freq=40):
+def filter_data(raw, l_freq=1, h_freq=40):
   # raw = my_preprocessing.reject_artefact(raw, 1, 40, False, '')
   raw.filter(l_freq=l_freq, h_freq=h_freq)
   return raw
@@ -351,7 +375,6 @@ def _save_transcript_file(segments_with_transcript, output_file):
     for ind, seg in enumerate(segments_with_transcript):
       writer.writerows([[ind, seg[0], seg[1], seg[2]]])
   return output_file
-
 
 def postprocess_and_save_segment(segments_raw, audio_file):
   segments_processed = postprocess_segments(segments_raw)
@@ -592,28 +615,37 @@ def normalize_data_for_plot(data):
     assert color_data.max() == 1
   return color_data
 
-def plot_meg_data_as_image(data, samplerate=10):
+
+ECG_EOG_channels = [31, 62]
+EEG_channels = [c for c in list(range(63)) if c not in ECG_EOG_channels]
+MEG_channels = list(range(160))
+def plot_data_as_image(data, data_type, samplerate=10):
   plot_every_ms = int(1000/samplerate)
-  color_data = data._data[0:160, 0::plot_every_ms]
+  if data_type == 'meg':
+    color_data = data._data[MEG_channels, 0::plot_every_ms]
+  elif data_type == 'eeg':
+    color_data = data._data[EEG_channels, 0::plot_every_ms]
+  else:
+    print('unknown data type')
 
   color_data = normalize_data_for_plot(color_data)
   # Creates PIL image
   img = Image.fromarray(np.uint8(cm.seismic(color_data)*255))
   return img, color_data
 
-def pad_color_data(meg_color_data, eeg_color_data):  
+def pad_color_data(meg_color_data, eeg_color_data):
   meg_length = len(meg_color_data[0,:])
   eeg_length = len(eeg_color_data[0,:])
   merged_length = max(meg_length, eeg_length)
   print("meg_length %s  eeg_length %s" % (meg_length, eeg_length))
   if merged_length - meg_length > 0:
     meg_color_data = np.append(
-        meg_color_data, 
+        meg_color_data,
         np.ones((len(meg_color_data[:,0]), merged_length - meg_length))*0.5,
         axis=1)
   elif merged_length - eeg_length > 0:
     eeg_color_data = np.append(
-        eeg_color_data, 
+        eeg_color_data,
         np.ones((len(eeg_color_data[:,0]), merged_length - eeg_length))*0.5,
         axis=1)
   print("meg_color_data shape: " )
@@ -664,7 +696,7 @@ def extract_meg_eeg_colordata(task,meg_data,eeg_data,samplerate):
     print("eeg_pad_length: %s" % eeg_pad_length)
     eeg_color_data = np.append(
         np.ones((63, eeg_pad_length))*0.5,
-        eeg_color_data, 
+        eeg_color_data,
         axis=1)
 
   print("meg_color_data.shape:")
@@ -682,12 +714,13 @@ def extract_meg_eeg_colordata(task,meg_data,eeg_data,samplerate):
 
 def plot_data_with_speech_segmentation_as_image(task,meg_data,eeg_data,audio_data,
                                                 samplerate=100):
+
   meg_color_data, eeg_color_data, length = extract_meg_eeg_colordata(task,meg_data,eeg_data,
                                                 samplerate)
 
   # plot meg data + segments first
   segment_color_data = generate_segment_color_data(audio_data, samplerate, length)
-  
+
   color_data = np.append(meg_color_data, segment_color_data, axis=0)
 
   # plot time ticks
@@ -696,7 +729,7 @@ def plot_data_with_speech_segmentation_as_image(task,meg_data,eeg_data,audio_dat
   time_tick_color_data = np.tile(time_second_tick, (4, 1))
   color_data = np.append(color_data, time_tick_color_data, axis=0)
 
-  # plot eeg 
+  # plot eeg
   color_data = np.append(color_data, eeg_color_data, axis=0)
 
   # Creates PIL image
@@ -705,13 +738,279 @@ def plot_data_with_speech_segmentation_as_image(task,meg_data,eeg_data,audio_dat
 
 
 def plot_all_data_together(subject, task, local_dir="./my_folder/"):
+
   data_file, subject_dirs = get_data_for_subject_task(subject, task, local_dir)
   meg_data = load_meg_data(data_file)
   meg_data = denoise_meg_data(meg_data)
-  meg_data = filter_meg_data(meg_data)
+  meg_data = filter_data(meg_data)
   audio_data = load_processed_audio_data(subject, task)
   eeg_data = load_eeg_data(data_file)
+  eeg_data = filter_data(eeg_data)
 
   img = plot_data_with_speech_segmentation_as_image(task, meg_data, eeg_data, audio_data)
   return img
 
+def get_all_tasks():
+  return ['B1', 'B2','B3','B4','B5']
+
+
+
+def get_subject_task_audio_metadata(subject, task):
+    participant_file = '/content/my_folder/data/audios_metadata/%s/subject_mic_%s_segments_with_transcript.csv' % (subject, task)
+    interviewer_file = '/content/my_folder/data/audios_metadata/%s/console_mic_%s_segments_with_transcript.csv' % (subject, task)
+
+    participant_segments = read_transcript_file(participant_file)
+    interviewer_segments = read_transcript_file(interviewer_file)
+
+    participant_offset, _ = read_offset('/content/my_folder/data/audios_metadata/%s/subject_mic_%s_offset.csv' % (subject, task))
+    interviewer_offset, _ = read_offset('/content/my_folder/data/audios_metadata/%s/console_mic_%s_offset.csv' % (subject, task))
+
+
+    participant_segments = apply_segment_offset(participant_segments, participant_offset)
+    interviewer_segments = apply_segment_offset(interviewer_segments, interviewer_offset)
+
+    return participant_segments, interviewer_segments
+
+def apply_segment_offset(segments, offset):
+  return [[seg[0]-offset, seg[1]-offset, seg[2]] for seg in segments]
+
+
+def combine_segments(participant_segments, interviewer_segments):
+  segment = []
+  p_i = 0
+  i_i = 0
+  p_len = len(participant_segments)
+  i_len = len(interviewer_segments)
+  while p_i < p_len or i_i < i_len:
+    if p_i == p_len:
+
+      segment.append(["interviewer"] + interviewer_segments[i_i])
+      i_i += 1
+    elif i_i == i_len:
+      segment.append(["participant"] + participant_segments[p_i])
+      p_i += 1
+
+    elif participant_segments[p_i] < interviewer_segments[i_i]:
+      segment.append(["participant"] + participant_segments[p_i])
+      p_i += 1
+    else:
+      segment.append(["interviewer"]+ interviewer_segments[i_i])
+      i_i += 1
+  return segment
+
+
+def read_transcript_file(file):
+  if os.path.isfile(file):
+    df = pd.read_csv(file)
+    segments = []
+    for _, row in df.iterrows():
+      segments.append([row['start'], row['end'], row['text']])
+  else:
+    # read fall-back file without transcript
+    df = pd.read_csv(file.replace('_with_transcript',''))
+    segments = []
+    for _, row in df.iterrows():
+      segments.append([row['start'], row['end'], ''])  # empty string for transcript
+
+  return segments
+
+import matplotlib.pyplot as plt
+import numpy as np
+import matplotlib.ticker as plticker
+
+def _save_labelled_transcript_file(segments, output_file):
+  with open(output_file, 'w', newline='') as f:
+    writer = csv.writer(f)
+    writer.writerows([["index", "person", "start", "end", "text", "is_full_turn", "encloses"]])
+    for ind, seg in enumerate(segments):
+      writer.writerows([[ind, seg[0], seg[1], seg[2],  seg[3], seg[4], seg[5]]])
+  return output_file
+
+
+def plot_and_save_conversation(subject, task):
+  participant_segments, interviewer_segments = get_subject_task_audio_metadata(subject, task)
+  segments = combine_segments(participant_segments, interviewer_segments)
+
+  segments = label_turn_taking(segments)
+  _save_labelled_transcript_file(segments, '/content/my_folder/data/audios_metadata_labelled/%s_%s.csv' % (subject, task))
+
+
+  fig, axe = plt.subplots(figsize=(72,24))
+  axe.invert_yaxis()
+  #Spacing between each line
+  intervals = float(5)
+  loc = plticker.MultipleLocator(base=intervals)
+  axe.xaxis.set_major_locator(loc)
+
+  axe.grid(axis="x")
+
+  for index, seg in enumerate(segments):
+      y = index
+      if seg[0] == 'interviewer':
+        c = 'tan'
+      else:
+        c = 'pink'
+      x_start = seg[1]
+      axe.broken_barh([(x_start, seg[2] - seg[1])],
+                      (y-0.5,0.8),
+                      facecolors =(c))
+      if seg[4] == True: # tagged as a full-turn in conversation
+        axe.text(x_start+0.1, y+0.1, seg[3])
+      else:
+        # use bracket to mark a non-full-turn (e.g. back-channeling such as "yeah, hmm, ok")
+        axe.text(x_start+0.1, y+0.1, "(%s)" % (seg[3]))
+
+  plt.savefig('/content/my_folder/data/audios_metadata_plot/%s_%s.png' % (subject, task))
+
+def label_turn_taking(segments):
+  def _is_seg_enclosed_by_others(i_seg, seg, segments):
+    ## seg_a = ['interviewer', 2, 4, 'adfdfff']
+    ## seg_b = ['participant', 1, 6, 'oadfak asdfa asdf']
+    ## We say seg_a is enclosed by seg_
+    ## Also note that all segments are sorted by start_time
+
+    for i in range(i_seg):
+      if segments[i][2] > seg[2]: # segments[i][1] < seg[1] will always be true
+        return True, i
+    return False, None
+
+  for i, seg in enumerate(segments):
+    segments[i].extend([None, []]) # the list of segments that it encloses
+    is_enclosed, enclosed_by = _is_seg_enclosed_by_others(i, seg, segments)
+    if is_enclosed: ## An enclosed segment is not a "full-turn" in a two-person conversation
+      segments[i][4] = False
+      segments[enclosed_by][5].append(i)
+    else:
+      ## Otherwies tag it as a full-turn
+      segments[i][4] = True
+
+  return segments
+
+def get_participant_turns(file):
+  min_event_duration = 2 # seconds
+  df = pd.read_csv(file)
+  participant_turns = []
+  for _, row in df.iterrows():
+    if row['person'] == 'participant' \
+        and (row['end']-row['start']) > min_event_duration \
+        and bool(row['is_full_turn']):
+
+      participant_turns.append([row['start'],row['end']])
+
+  return participant_turns
+
+
+def plot_top_channels(subject, bad_channels=None, denoise=False, top_n_channels_input=None):
+  data_files, subject_dir = get_data_for_subject(subject)
+
+  top_n_channels_output = {'eeg':{}, 'meg':{}}
+
+  fig_eeg, ax = plt.subplots(5,1,figsize=(60, 40), sharex='all')
+  for i, data_file in enumerate(data_files):
+    eeg_data = load_eeg_data(data_file)
+    if denoise:
+      eeg_data = filter_data(eeg_data, l_freq=1, h_freq=40)
+
+    bad_channels_here = []
+    if bad_channels:
+      task = 'B' + str(i+1)
+      try:
+        bad_channels_here = bad_channels['eeg'][subject][task]
+        print("bad_channels for % %s: %s" %(subject, task, bad_channels_here))
+      except:
+        pass
+
+    good_eeg_channels = [c for c in EEG_channels if c not in bad_channels_here]
+
+    if top_n_channels_input is None:
+      top_n_channels = get_channels_with_top_magnitude(eeg_data._data[good_eeg_channels,:])
+      top_n_channels_output['eeg'][i] = top_n_channels
+    else:
+      top_n_channels = top_n_channels_input['eeg'][i]
+      top_n_channels = [c for c in  top_n_channels if c not in bad_channels_here]
+    plot_data(eeg_data, top_n_channels, ax[i])
+
+  prefix = ""
+  if bad_channels:
+    prefix += "_bad_channels_removed"
+  if denoise:
+    prefix += "_denoised"
+
+  fig_name = '/content/my_folder/data/plots/%s_top_eeg_channels%s.png' % (subject, prefix)
+  fig_eeg.savefig(fig_name)
+
+  print('Saving eeg figs %s...' % fig_name)
+
+
+
+  fig_meg, ax = plt.subplots(5,1,figsize=(60, 40), sharex='all')
+  for i, data_file in enumerate(data_files):
+    meg_data = load_meg_data(data_file)
+    if denoise:
+      meg_data = denoise_meg_data(meg_data)
+      meg_data = filter_data(meg_data, l_freq=1, h_freq=40)
+
+    bad_channels_here = []
+    if bad_channels:
+      task = 'B' + str(i+1)
+      try:
+        bad_channels_here = bad_channels['meg'][subject][task]
+        print("bad_channels for % %s: %s" %(subject, task, bad_channels_here))
+      except:
+        pass
+
+    good_meg_channels = [c for c in MEG_channels if c not in bad_channels_here]
+
+    if top_n_channels_input is None:
+      top_n_channels = get_channels_with_top_magnitude(meg_data._data[good_meg_channels,:])
+      top_n_channels_output['meg'][i] = top_n_channels
+    else:
+      top_n_channels = top_n_channels_input['meg'][i]
+      top_n_channels = [c for c in top_n_channels if c not in bad_channels_here]
+    plot_data(meg_data, top_n_channels, ax[i])
+
+
+  prefix = ""
+  if bad_channels:
+    prefix += "_bad_channels_removed"
+  if denoise:
+    prefix += "_denoised"
+  fig_name = '/content/my_folder/data/plots/%s_top_meg_channels%s.png' % (subject, prefix)
+
+  fig_meg.savefig(fig_name)
+
+  print('Saving meg figs %s...' % fig_name)
+  return fig_meg, fig_eeg, top_n_channels_output
+
+
+def plot_data(data, channels, ax, every_ms=10, duration=None):
+  sample_rate = 1000
+  if duration is None:
+    duration = int(len(data._data[0,:]) / sample_rate) - 1
+    print('duration:')
+    print(duration)
+  ax.plot(np.arange(0, duration, 1/(sample_rate/every_ms)), np.transpose(data._data[channels,0:duration*sample_rate:every_ms]*1000000)) # uV
+  ax.legend([str(i) for i in channels])
+  # return fig
+
+
+def get_channels_with_top_magnitude(data, top_n=10):
+  # Consider use peak-to-peak
+  abs_max = np.max(np.abs(data), axis=1)
+  sort_index = np.argsort(abs_max)
+  return sort_index[::-1][:top_n]
+
+
+def load_bad_channel_data(file):
+  df = pd.read_csv(file)
+  bad_channels = {}
+  for _, row in df.iterrows():
+    if row['subject'] not in bad_channels:
+      bad_channels[row['subject']] = {}
+    if row['task'] not in bad_channels[row['subject']]:
+      # Empty entry (None) means eyeballing hasn't been done
+      bad_channels[row['subject']][row['task']] = None
+    if isinstance(row['bad_channels'],str):
+      # Empty list ("[]") means eyeballing has been done and all channels are good
+      bad_channels[row['subject']][row['task']] = eval(row['bad_channels'])
+  return bad_channels
