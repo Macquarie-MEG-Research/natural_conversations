@@ -36,7 +36,7 @@ if need_transcribe:
   vad_pipeline = Pipeline.from_pretrained(
       # "pyannote/voice-activity-detection",
       "pyannote/speaker-diarization-3.0",
-      use_auth_token="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")
+      use_auth_token="add_toke_here")
 
   print(vad_pipeline)
 
