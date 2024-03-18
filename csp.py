@@ -173,7 +173,7 @@ for si, sub in enumerate(use_subjects):
 
 # Binarize absolute value of STC coefficients: keep top quartile of weights across
 # vertices (-2), then sum across components (-1) and subjects (0)
-data = (stc_data >= np.percentile(stc_data, 75, axis=-2, keepdims=True)).sum(-1).sum(0)
+data = (stc_data >= np.percentile(stc_data, 75, axis=(-2, -1), keepdims=True)).sum(-1).sum(0)
 assert data.shape == (len(csp_freqs), len(time_bins), n_vertices)
 data.shape = (-1, n_vertices)
 stc = mne.SourceEstimate(
