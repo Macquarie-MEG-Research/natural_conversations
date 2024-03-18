@@ -50,12 +50,19 @@ baseline = None
 # Decoding
 contrasts = [("conversation", "repetition")]
 decoding_csp = True
-decoding_csp_times = [-1, 0, 1]  # before and after
+decoding_csp_times = [-1, -0.5, 0, 0.5, 1]  # before and after
 decoding_csp_freqs = {
     'theta': [4, 7],
     'alpha': [8, 13],
     'beta': [14, 30],
+    'gamma': [31, 49],
 }
+
+# TFRs
+time_frequency_freq_min = 1
+time_frequency_freq_max = 50
+time_frequency_baseline = (-1., 1.)
+time_frequency_baseline_mode = "logratio"
 
 # Source estimation
 run_source_estimation = True

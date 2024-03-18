@@ -22,6 +22,7 @@ Done
 
 Todo
 ----
+- Fix band-pass upper bound for gamma (45 or 49)
 - Add end-of turn annotations as well
 - Compare autoreject, LOF, and EEG-find-bad-channels-maxwell
 - Run STRF-type analysis on M/EEG using auditory
